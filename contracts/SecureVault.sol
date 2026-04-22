@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import "@openzeppelin/contracts-upgradeable@5.0.2/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable@5.0.2/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable@5.0.2/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable@5.0.2/utils/cryptography/EIP712Upgradeable.sol";
+import "@openzeppelin/contracts@5.0.2/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts@5.0.2/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts@5.0.2/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts@5.0.2/token/ERC721/IERC721Receiver.sol";
 
 contract RolesRegistry {
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
@@ -27,6 +26,23 @@ contract RolesRegistry {
 
     function hasRole(bytes32 role, address account) public view returns (bool) {
         return _roles[role][account];
+    }
+}
+
+abstract contract ReentrancyGuard {
+    uint256 private _status;
+    uint256 private constant NOT_ENTERED = 1;
+    uint256 private constant ENTERED = 2;
+
+    function __ReentrancyGuard_init() internal {
+        _status = NOT_ENTERED;
+    }
+
+    modifier nonReentrant() {
+        require(_status != ENTERED, "ReentrancyGuard: reentrant call");
+        _status = ENTERED;
+        _;
+        _status = NOT_ENTERED;
     }
 }
 
@@ -53,8 +69,8 @@ contract SecureVault is
     Initializable,
     UUPSUpgradeable,
     OwnableUpgradeable,
-    ReentrancyGuardUpgradeable,
     EIP712Upgradeable,
+    ReentrancyGuard,
     RolesRegistry,
     UpgradeTimelock,
     IERC721Receiver
@@ -99,12 +115,9 @@ contract SecureVault is
         bytes32 _commitmentHash,
         uint256 _lockDuration
     ) public initializer {
-        __Ownable_init();
+        __Ownable_init(_owner);
         __ReentrancyGuard_init();
-        __UUPSUpgradeable_init();
         __EIP712_init("SecureVault", "1");
-
-        _transferOwnership(_owner);
 
         guardian = _guardian;
         counterparty = _counterparty;
@@ -246,3 +259,4 @@ contract SecureVault is
         }
     }
 }
+
