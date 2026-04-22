@@ -1,47 +1,39 @@
-const { ethers } = require("hardhat");
+const { ethers, upgrades } = require("hardhat");
 
 async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Deploying contracts with the account:", deployer.address);
 
-  // For a production UUPS project, you would normally use @openzeppelin/hardhat-upgrades
-  // but here we demonstrate a base deployment and initialization as requested.
-  
   const SecureVault = await ethers.getContractFactory("SecureVault");
-  
-  // Parameters for initialization
-  const owner = deployer.address;
-  const guardian = "0x000000000000000000000000000000000000dead"; // Placeholder
-  const counterparty = "0x000000000000000000000000000000000000beef"; // Placeholder
-  const secret = ethers.encodeBytes32String("secret-code");
-  const commitmentHash = ethers.keccak256(ethers.solidityPacked(["bytes32"], [secret]));
-  const lockDuration = 60 * 60 * 24; // 24 hours
 
-  console.log("Deploying SecureVault...");
-  const vault = await SecureVault.deploy();
+  const owner = deployer.address;
+  const guardian = "0x000000000000000000000000000000000000dEaD"; // замени на реальный адрес
+  const counterparty = "0x000000000000000000000000000000000000bEEF"; // замени на реальный адрес
+  const secret = ethers.encodeBytes32String("secret-code");
+  const commitmentHash = ethers.keccak256(
+    ethers.solidityPacked(["bytes32"], [secret])
+  );
+  const lockDuration = 60 * 60 * 24; // 24 часа
+
+  console.log("Deploying SecureVault as UUPS proxy...");
+
+  const vault = await upgrades.deployProxy(
+    SecureVault,
+    [owner, guardian, counterparty, commitmentHash, lockDuration],
+    { initializer: "initialize", kind: "uups" }
+  );
+
   await vault.waitForDeployment();
   const vaultAddress = await vault.getAddress();
 
-  console.log("SecureVault deployed to:", vaultAddress);
-
-  console.log("Initializing...");
-  const initTx = await vault.initialize(
-    owner,
-    guardian,
-    counterparty,
-    commitmentHash,
-    lockDuration
-  );
-  await initTx.wait();
-
-  console.log("SecureVault initialized successfully.");
+  console.log("SecureVault proxy deployed to:", vaultAddress);
   console.log("-----------------------------------");
   console.log("Configured Parameters:");
-  console.log("- Owner:", owner);
-  console.log("- Guardian:", guardian);
-  console.log("- Counterparty:", counterparty);
-  console.log("- CommitmentHash:", commitmentHash);
-  console.log("- LockDuration:", lockDuration, "seconds");
+  console.log("- Owner:          ", owner);
+  console.log("- Guardian:       ", guardian);
+  console.log("- Counterparty:   ", counterparty);
+  console.log("- CommitmentHash: ", commitmentHash);
+  console.log("- LockDuration:   ", lockDuration, "seconds");
 }
 
 main()
