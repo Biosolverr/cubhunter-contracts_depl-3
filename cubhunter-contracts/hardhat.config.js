@@ -15,9 +15,7 @@ module.exports = {
     },
   },
   networks: {
-    hardhat: {
-      // Default local network
-    },
+    hardhat: {},
     baseSepolia: {
       url: process.env.BASE_SEPOLIA_URL || "https://sepolia.base.org",
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
