@@ -1,23 +1,109 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.24;
+pragma solidity 0.8.28;
 
-import "@openzeppelin/contracts-upgradeable@5.0.2/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable@5.0.2/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable@5.0.2/access/OwnableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable@5.0.2/utils/cryptography/EIP712Upgradeable.sol";
-import "@openzeppelin/contracts@5.0.2/utils/cryptography/ECDSA.sol";
-import "@openzeppelin/contracts@5.0.2/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts@5.0.2/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts@5.0.2/token/ERC721/IERC721Receiver.sol";
+// ============ MINIMAL INLINE DEPENDENCIES ============
+
+abstract contract Initializable {
+    uint8 private _initialized;
+    bool private _initializing;
+
+    modifier initializer() {
+        bool isTopLevelCall = !_initializing;
+        require(
+            (isTopLevelCall && _initialized < 1) ||
+            (!isTopLevelCall && _initialized == 0),
+            "Initializable: contract is already initialized"
+        );
+        _initialized = 1;
+        if (isTopLevelCall) { _initializing = true; }
+        _;
+        if (isTopLevelCall) { _initializing = false; }
+    }
+
+    function _disableInitializers() internal {
+        _initialized = type(uint8).max;
+    }
+}
+
+abstract contract ContextUpgradeable is Initializable {
+    function _msgSender() internal view returns (address) { return msg.sender; }
+}
+
+abstract contract OwnableUpgradeable is Initializable, ContextUpgradeable {
+    address private _owner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    function __Ownable_init() internal initializer {
+        _transferOwnership(_msgSender());
+    }
+
+    function owner() public view returns (address) { return _owner; }
+
+    modifier onlyOwner() {
+        require(owner() == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+
+    function _transferOwnership(address newOwner) internal {
+        address oldOwner = _owner;
+        _owner = newOwner;
+        emit OwnershipTransferred(oldOwner, newOwner);
+    }
+}
+
+abstract contract ReentrancyGuardUpgradeable is Initializable {
+    uint256 private _status;
+
+    function __ReentrancyGuard_init() internal initializer {
+        _status = 1;
+    }
+
+    modifier nonReentrant() {
+        require(_status != 2, "ReentrancyGuard: reentrant call");
+        _status = 2;
+        _;
+        _status = 1;
+    }
+}
+
+interface IERC20 {
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address to, uint256 amount) external returns (bool);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
+}
+
+interface IERC721Receiver {
+    function onERC721Received(address, address, uint256, bytes calldata) external returns (bytes4);
+}
+
+interface IERC721 {
+    function safeTransferFrom(address from, address to, uint256 tokenId) external;
+}
+
+library SafeERC20 {
+    function safeTransfer(IERC20 token, address to, uint256 value) internal {
+        (bool success, bytes memory data) = address(token).call(
+            abi.encodeWithSelector(token.transfer.selector, to, value)
+        );
+        require(success && (data.length == 0 || abi.decode(data, (bool))), "SafeERC20: transfer failed");
+    }
+
+    function safeTransferFrom(IERC20 token, address from, address to, uint256 value) internal {
+        (bool success, bytes memory data) = address(token).call(
+            abi.encodeWithSelector(token.transferFrom.selector, from, to, value)
+        );
+        require(success && (data.length == 0 || abi.decode(data, (bool))), "SafeERC20: transferFrom failed");
+    }
+}
+
+// ============ ROLES REGISTRY ============
 
 contract RolesRegistry {
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
     bytes32 public constant COUNTERPARTY_ROLE = keccak256("COUNTERPARTY_ROLE");
-
     mapping(bytes32 => mapping(address => bool)) private _roles;
 
     event RoleGranted(bytes32 indexed role, address indexed account);
-    event RoleRevoked(bytes32 indexed role, address indexed account);
 
     function _grantRole(bytes32 role, address account) internal {
         _roles[role][account] = true;
@@ -29,22 +115,7 @@ contract RolesRegistry {
     }
 }
 
-abstract contract ReentrancyGuard {
-    uint256 private _status;
-    uint256 private constant NOT_ENTERED = 1;
-    uint256 private constant ENTERED = 2;
-
-    function __ReentrancyGuard_init() internal {
-        _status = NOT_ENTERED;
-    }
-
-    modifier nonReentrant() {
-        require(_status != ENTERED, "ReentrancyGuard: reentrant call");
-        _status = ENTERED;
-        _;
-        _status = NOT_ENTERED;
-    }
-}
+// ============ UPGRADE TIMELOCK ============
 
 abstract contract UpgradeTimelock {
     uint256 public constant UPGRADE_DELAY = 48 hours;
@@ -65,18 +136,16 @@ abstract contract UpgradeTimelock {
     }
 }
 
+// ============ SECURE VAULT ============
+
 contract SecureVault is
-    Initializable,
-    UUPSUpgradeable,
     OwnableUpgradeable,
-    EIP712Upgradeable,
-    ReentrancyGuard,
+    ReentrancyGuardUpgradeable,
     RolesRegistry,
     UpgradeTimelock,
     IERC721Receiver
 {
     using SafeERC20 for IERC20;
-    using ECDSA for bytes32;
 
     enum State { INIT, FUNDED, LOCKED, EXECUTION_PENDING, EXECUTED, REFUNDED }
 
@@ -93,9 +162,6 @@ contract SecureVault is
     address public quarantineInitiator;
 
     uint256 public nonce;
-
-    bytes32 public constant RECOVERY_TYPEHASH =
-        keccak256("Recovery(address newOwner,uint256 nonce,uint256 deadline)");
 
     event Deposited(address indexed sender, uint256 amount);
     event StateChanged(State indexed from, State indexed to);
@@ -115,9 +181,10 @@ contract SecureVault is
         bytes32 _commitmentHash,
         uint256 _lockDuration
     ) public initializer {
-        __Ownable_init(_owner);
+        __Ownable_init();
         __ReentrancyGuard_init();
-        __EIP712_init("SecureVault", "1");
+
+        _transferOwnership(_owner);
 
         guardian = _guardian;
         counterparty = _counterparty;
@@ -132,11 +199,6 @@ contract SecureVault is
 
     modifier inState(State _state) {
         require(currentState == _state, "Invalid state for operation");
-        _;
-    }
-
-    modifier noFlashLoan() {
-        require(tx.origin == msg.sender, "Flash loan detected: sender must be EOA");
         _;
     }
 
@@ -156,7 +218,6 @@ contract SecureVault is
     function initiateExecution(bytes32 secret) external inState(State.LOCKED) {
         require(keccak256(abi.encodePacked(secret)) == commitmentHash, "Invalid secret");
         require(block.timestamp >= lockTimestamp + lockDuration, "Lock period not over");
-
         currentState = State.EXECUTION_PENDING;
         emit SecretRevealed(secret);
         emit StateChanged(State.LOCKED, State.EXECUTION_PENDING);
@@ -164,12 +225,10 @@ contract SecureVault is
 
     function execute() external nonReentrant inState(State.EXECUTION_PENDING) {
         require(msg.sender == counterparty || msg.sender == owner(), "Unauthorized");
-
         currentState = State.EXECUTED;
         uint256 balance = address(this).balance;
         (bool success, ) = counterparty.call{value: balance}("");
         require(success, "Transfer failed");
-
         emit StateChanged(State.EXECUTION_PENDING, State.EXECUTED);
     }
 
@@ -181,13 +240,11 @@ contract SecureVault is
                 block.timestamp >= lockTimestamp + lockDuration + refundDelay),
             "Refund not available yet"
         );
-
         State prevState = currentState;
         uint256 balance = address(this).balance;
         currentState = State.REFUNDED;
         (bool success, ) = owner().call{value: balance}("");
         require(success, "Transfer failed");
-
         emit StateChanged(prevState, State.REFUNDED);
         emit Refunded(msg.sender, balance);
     }
@@ -195,7 +252,6 @@ contract SecureVault is
     function initiateQuarantine() external payable {
         require(msg.value == QUARANTINE_STAKE, "Must stake 0.01 ETH");
         require(quarantineEndTime < block.timestamp, "Already quarantined");
-
         quarantineInitiator = msg.sender;
         quarantineEndTime = block.timestamp + 12 hours;
         emit Quarantined(msg.sender, quarantineEndTime);
@@ -215,14 +271,15 @@ contract SecureVault is
         bytes calldata guardianSignature
     ) external {
         require(block.timestamp <= deadline, "Expired deadline");
+        require(ownerSignature.length == 65 && guardianSignature.length == 65, "Invalid sig length");
 
-        bytes32 structHash = keccak256(
-            abi.encode(RECOVERY_TYPEHASH, newOwner, nonce, deadline)
-        );
-        bytes32 hash = _hashTypedDataV4(structHash);
+        bytes32 messageHash = keccak256(abi.encodePacked(
+            "\x19Ethereum Signed Message:\n32",
+            keccak256(abi.encode(newOwner, nonce, deadline))
+        ));
 
-        address signer1 = hash.recover(ownerSignature);
-        address signer2 = hash.recover(guardianSignature);
+        address signer1 = _recover(messageHash, ownerSignature);
+        address signer2 = _recover(messageHash, guardianSignature);
 
         require(signer1 == owner(), "Invalid owner signature");
         require(signer2 == guardian, "Invalid guardian signature");
@@ -231,14 +288,22 @@ contract SecureVault is
         _transferOwnership(newOwner);
     }
 
+    function _recover(bytes32 hash, bytes calldata sig) internal pure returns (address) {
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := calldataload(sig.offset)
+            s := calldataload(add(sig.offset, 32))
+            v := byte(0, calldataload(add(sig.offset, 64)))
+        }
+        return ecrecover(hash, v, r, s);
+    }
+
     function assertFundIntegrity() public view {
         if (currentState == State.EXECUTED || currentState == State.REFUNDED) {
             assert(address(this).balance == 0);
         }
-    }
-
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
-        _checkUpgradeTimelock(newImplementation);
     }
 
     function scheduleUpgrade(address newImplementation) external onlyOwner {
